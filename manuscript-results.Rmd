@@ -1,0 +1,362 @@
+---
+title: 'Reproducible code for results in the text of the article "Moral arguments explain the link between moral opinions and verbal ability."'
+output:
+  html_document:
+    keep_md: TRUE
+---
+
+```{r setup, include = FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+
+library(tidyverse, quietly = TRUE)
+library(broom)
+library(knitr)
+
+source("auxiliary_functions.R")
+
+gss_items <- read_csv("data/gss-items-98v.csv")
+
+gss <- read_rds("data/cleaned-gss.rds") 
+
+gss <- gss %>% 
+# change into long format with 98 copies of GSS, one per each issue
+  gather(issue, opinion, one_of(gss_items$issue)) %>% 
+  # othshelp has very small variance for the subset of data with wordsum
+  filter(!issue == "othshelp") %>% 
+  drop_na(wordsum, educ, opinion)
+
+mf_data <- read_rds("data/mf-advantage.rds")
+
+gss <- gss %>% 
+  mutate(wordsum_gr = cut(wordsum, 
+                          quantile(wordsum, c(0, .33, .66, 1)),
+                          c("Low", "Middle", "High"),
+                          include.lowest = TRUE),
+         wordsum = wordsum - median(wordsum, na.rm = TRUE),
+         educ = scale(educ)[,1],
+         age = scale(age)[,1]) %>% 
+  left_join(mf_data %>% 
+              mutate(hfvl_gr = cut(hfvl_advantage, 
+                       c(-1, -.1, .1, 1),
+                       c("Negative", "Neutral", "Positive"))))
+
+```
+
+## Method
+
+### Self-reported ideology
+
+```{r}
+
+gss %>% 
+  drop_na(polviews) %>% 
+  count(polviews) %>% 
+  mutate(percent = round(n*100/sum(n))) %>% 
+  kable()
+  
+```
+
+### Verbal ability
+
+```{r}
+
+gss %>% 
+  count(wordsum_gr) %>% 
+  mutate(percent = round(n*100/sum(n))) %>% 
+  kable()
+
+```
+
+
+### Effects of verbal ability on moral opinions
+
+Verbal ability effects range.
+
+```{r}
+
+by_issue <- gss %>% 
+  drop_na(polviews, educ, sex, age, race) %>% 
+  group_by(issue, hfvl_advantage, hfvl_gr) %>% 
+  nest()
+
+wordsum_effect_logit_contr <- function(data){
+  glm(opinion ~ wordsum + educ + polviews_cont + sex + race + age + year, 
+      data,
+      weights = wgt,
+      family = quasibinomial()) %>% 
+     tidy(conf.int = TRUE) %>% 
+     filter(term == "wordsum")
+}
+
+wordsum_eff <- by_issue %>% 
+  mutate(coef = map(data, wordsum_effect_logit_contr)) %>% 
+  unnest(coef) %>% 
+  select(-data) %>% 
+  ungroup()
+
+```
+
+```{r}
+
+wordsum_eff %>% 
+  filter(estimate %in% c(min(estimate), max(estimate))) %>% 
+  select(estimate, issue) %>% 
+  left_join(gss_items) %>% 
+  kable()
+
+```
+
+Confidence intervals range.
+
+```{r}
+
+wordsum_eff %>% 
+  mutate(ci_width = conf.high - conf.low) %>% 
+  summarise(min(ci_width), max(ci_width)) %>% 
+  kable()
+
+```
+
+### Universal arguments advantage (UAA) measures.
+
+The UAA measures range.
+
+```{r}
+
+wordsum_eff %>% 
+  filter(hfvl_advantage %in% c(min(hfvl_advantage), max(hfvl_advantage))) %>% 
+  select(hfvl_advantage, issue) %>% 
+  left_join(gss_items)
+
+```
+
+
+## Results 
+
+### Hypothesis 1
+
+```{r, fig.width=8.4, fig.height=3.2, fig.cap="Figure 1. Estimates of how the proportion that holds the opinion with universal argument advantage (in essence, the liberal opinion) has trended over time, averaged over 54 moral issues covered by the General Social Survey."}
+
+# preprocess data for models
+by_issue_lib_side <- gss %>% 
+  drop_na(polviews, educ, sex, age, race) %>% 
+  group_by(issue) %>% 
+  # use only issues that have been asked at least 3 time and have clear advantage
+  filter(n_distinct(year) > 2,
+         hfvl_gr != "Neutral") %>% 
+  # reverse opinion for issues with negative UAA
+  mutate(opinion = ifelse(hfvl_gr == "Negative", 1 - opinion, opinion)) %>%   
+  group_by(issue, hfvl_advantage, hfvl_gr) %>% 
+  nest()
+
+predict_trend <- function(data) {
+  glm(opinion ~ time*polviews*wordsum_gr + 
+        time*polviews*educ +
+        time*sex + time*race + time*age,  
+           data, 
+           weights = wgt, 
+           family = quasibinomial())  
+}
+
+newdata <- expand.grid(year = 1974:2018,
+                       polviews = levels(gss$polviews),
+                       educ = 0,
+                       sex = "female",
+                       race = "white",
+                       age = 0,
+                       wordsum_gr = levels(gss$wordsum_gr)) %>% 
+  as_tibble() %>% 
+  mutate(time = (year - 1974)/10)
+
+predictions <- by_issue_lib_side %>% 
+  mutate(model = map(data, predict_trend),
+         predicted_trends = map(model, 
+                                ~mutate(newdata, fit = predict(.x, 
+                                                       newdata, 
+                                                       type = "response")))) %>% 
+  unnest(predicted_trends)
+
+predictions %>% 
+  mutate(polviews = fct_relabel(polviews, str_to_title)) %>%
+  group_by(year, polviews, wordsum_gr) %>% 
+  summarise(mean = mean(fit)) %>% 
+  ggplot(aes(year, mean, linetype = wordsum_gr)) +
+  geom_line(size = .5) +
+  labs(x = NULL, y = "Proportion", linetype = "Wordsum score") +
+  scale_linetype_manual(values = c("dotted", "dashed", "solid")) +
+  scale_x_continuous(breaks = seq(1975, 2015, 10)) +
+  ylim(c(0, 1)) +
+  facet_wrap(~polviews) +
+  theme_classic(base_size = 14) +
+  theme(legend.position = c(.92, .25), 
+        legend.title = element_text(size = 13),
+        panel.grid.major = element_line(colour = "grey80", size = .2),
+        panel.grid.minor = element_line(colour = "grey80", size = .1))
+  
+```
+
+### Hypothesis 2
+
+Correlation between the verbal ability effect and UAA.
+```{r}
+
+str_c(cor.test(wordsum_eff$hfvl_advantage, wordsum_eff$estimate) %>% 
+        format_test(),
+      ". R squared = ",
+      cor(wordsum_eff$hfvl_advantage, wordsum_eff$estimate)^2 %>% 
+        round(2))
+
+```
+
+A linear regression effect after recoding.
+
+```{r}
+
+wordsum_eff_pos <- wordsum_eff %>% 
+  mutate(estimate = ifelse(hfvl_advantage < 0, -estimate, estimate),
+         hfvl_advantage = ifelse(hfvl_advantage < 0, -hfvl_advantage, hfvl_advantage))
+
+str_c(lm(estimate ~ hfvl_advantage, wordsum_eff_pos) %>% 
+        format_coef("hfvl_advantage"),
+      ". R squared ",
+      cor(wordsum_eff_pos$hfvl_advantage, wordsum_eff_pos$estimate)^2 %>% 
+        round(2))
+
+```
+
+```{r fig.width = 6, fig.asp=.7, fig.cap="Figure 2. The effect of verbal ability upon 97 moral opinions plotted against the UAA of the same opinion. Regression line with 95% confidence interval."}
+
+wordsum_eff %>% 
+  filter(term == "wordsum") %>% 
+  ggplot(aes(hfvl_advantage, estimate)) +
+  geom_vline(xintercept = 0, color = "grey70", size = .4) +
+  geom_hline(yintercept = 0, color = "grey70", size = .4) +
+  geom_point(size = 1.5, shape = 19, color = "#12213B", alpha = 1) +
+  geom_smooth(size = .7, method="lm", fullrange = TRUE, color = "grey10")+
+  labs(x = "Universal argument advantage\nof the moral opinion", 
+       y = "Effect of verbal ability upon\nthe probability to hold the moral opinion") +
+  theme_classic(base_size = 14) 
+
+```
+
+
+### Hypothesis 3
+
+```{r}
+
+by_issue_int <- gss %>% 
+  mutate(polviews_full = factor(polviews_cont)) %>% 
+  drop_na(polviews_full, sex, race, age) %>% 
+  group_by(issue, hfvl_advantage, hfvl_gr) %>% 
+  nest()
+
+wordsum_effect_logit_polv <- function(data){
+  wordsum_est <- glm(opinion ~ wordsum*polviews_full + 
+        educ*polviews_full + 
+        sex + race + age + year, 
+      data,
+      weights = wgt,
+      family = quasibinomial()) %>% 
+    tidy() %>% 
+    select(term, estimate) %>% 
+    filter(str_detect(term, "wordsum"))
+  
+  wordsum_est$estimate[-1] <- wordsum_est$estimate[-1] + wordsum_est$estimate[1]
+  
+  wordsum_est %>% 
+    mutate(polviews_full = str_replace(term, "wordsum$", "-3"),
+           polviews_full = str_replace(polviews_full, "wordsum:polviews_full", ""))
+}
+
+wordsum_polv_eff <- by_issue_int %>%
+  mutate(coef = map(data, wordsum_effect_logit_polv)) %>% 
+  unnest(coef) %>% 
+  ungroup() 
+
+r_sq <- wordsum_polv_eff %>% 
+  mutate(polviews_full = factor(polviews_full, 
+                                levels = unique(polviews_full),
+                                labels = c("Extremely conservative",
+                                           "Conservative",
+                                           "Slightly conservative", 
+                                           "Moderate",
+                                           "Slightly liberal", 
+                                           "Liberal", 
+                                           "Extremely liberal"))) %>%
+  group_by(polviews_full) %>%
+  summarise(r_sq = round(cor(hfvl_advantage, estimate)^2*100)) %>%
+  mutate(r_sq = paste0(r_sq, "%")) 
+
+
+```
+
+
+```{r fig.width = 14, fig.asp=.3, fig.cap="Figure 3. The same scatter plot as in Figure 1 for verbal ability effects calculated within each of seven ideology-based segments of the population."}
+
+wordsum_polv_eff %>% 
+  mutate(polviews_full = factor(polviews_full, 
+                                levels = unique(polviews_full),
+                                labels = c("Extremely conservative",
+                                           "Conservative",
+                                           "Slightly conservative", 
+                                           "Moderate",
+                                           "Slightly liberal", 
+                                           "Liberal", 
+                                           "Extremely liberal"))) %>% 
+  ggplot(aes(hfvl_advantage, estimate, label = issue)) +
+  geom_point(size = 1.5, shape = 19, color = "#12213B", alpha = .5) +
+  geom_smooth(size = .7, method="lm", fullrange = TRUE, color = "grey10")+
+  geom_text(data = r_sq, aes(label = r_sq), x = .35, y = .5)+
+  facet_wrap(~polviews_full, nrow = 1) +
+  labs(x = "Universal argument advantage of the moral opinion", 
+       y = "Effect of verbal ability upon\nthe probability to hold the moral opinion")+
+  theme_classic(base_size = 14)
+
+```
+
+### Interaction table
+
+```{r}
+
+wordsum_polv_eff <- wordsum_polv_eff %>% 
+  mutate(polviews_full = as.numeric(polviews_full))
+
+m_polv <- lm(estimate ~ polviews_full, wordsum_polv_eff)
+m_int <- lm(estimate ~ hfvl_advantage*polviews_full, wordsum_polv_eff)
+
+options(knitr.kable.NA = '')
+
+tidy(m_int, conf.int = TRUE) %>% 
+  mutate(mod2 = sprintf("%.2f [%.2f, %.2f]", estimate, conf.low, conf.high)) %>% 
+  select(term, mod2) %>% 
+  mutate(term = str_replace_all(term, c("hfvl_advantage" = "UAA", 
+                                        ":" = " x ",
+                                        "polviews_full" = "Ideology"))) %>% 
+  select(term, mod2) %>% 
+  kable(col.names = c("", ""),
+        format = "html",
+        caption = "Table 1. Linear regressions examining how the effect of verbal ability on moral opinions with universal argument advantage varied with the size of the advantage, the ideology of the segment, and  their interaction.")
+
+```
+Note: `r  n_distinct(wordsum_polv_eff$issue)` issues, N = `r nrow(wordsum_polv_eff)`. The ideology scale is coded from -3 (extremely conservative) to 3 (extremely liberal). Adjusted R2 = `r sprintf("%.2f", summary(m_int)$adj.r.squared)`. 
+
+
+## Supplementary table 1. 
+
+The 97 GSS items with estimated effect of verbal ability in log odds with 95% CI and universal argument advantage (UAA). 
+
+```{r}
+
+wordsum_eff %>% 
+  left_join(gss_items) %>% 
+  mutate(est = sprintf("%.2f [%.2f, %.2f]", estimate, conf.low, conf.high)) %>% 
+  select(question, est, hfvl_advantage) %>% 
+  arrange(desc(abs(hfvl_advantage))) %>% 
+  kable(digits = 2, 
+        format = "html",
+        col.names = c("Question", "Verb.ab. effect", "UAA"),
+        caption = "Table S1.The 97 GSS items with estimated effect of verbal ability in log odds with 95% CI and universal argument advantage (UAA), sorted by absolute value of UAA.")
+
+```
+

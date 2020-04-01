@@ -59,11 +59,7 @@ gss_bin <- gss %>%
   mutate(pornlaw = ifelse(pornlaw == "legal", 0 , 1)) %>% 
   mutate_at(gss_items$issue[gss_items$issue != "pornlaw"], dichotomize)
 
-# change into long format with 98 copies of GSS, one per each issue
-# add harm-fainess advantage
-
-gss_bin <- gss_bin %>% 
-  gather(issue, opinion, one_of(gss_items$issue)) 
-
 write_rds(gss_bin, "data/cleaned-gss.rds", compress = "gz")
+
+
 

@@ -87,9 +87,6 @@ full_arguments <- full_arguments %>%
                      sci_knowledge, sci_kn_cat, 
                      oth_att, oth_att_cat))
 
-write_rds(full_arguments, "data/full-arguments-data.rds")
-
-
 # calculate mf measures ---------------------------------------------------
 
 # filter data for only universal arguments, aggregate by position, 
