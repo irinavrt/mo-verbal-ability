@@ -100,4 +100,17 @@ mf_data <- full_arguments %>%
   transmute(hfvl_advantage = pro - against) %>% 
   ungroup()
 
+mf_data <-  mf_data %>% 
+  left_join(
+    full_arguments %>%
+      filter(mf %in% c("harm", "fair", "lib", "viol")) %>% 
+      group_by(verb_ab, issue, type) %>% 
+      summarise(hfvl = mean(value, na.rm = TRUE)) %>% 
+      spread(type, hfvl) %>% 
+      transmute(hfvl_advantage = pro - against) %>% 
+      spread(verb_ab, hfvl_advantage) %>% 
+      rename(hfvl_adv_low = low, hfvl_adv_high = high) %>% 
+      ungroup()
+)
+
 write_rds(mf_data, "data/mf-advantage.rds")

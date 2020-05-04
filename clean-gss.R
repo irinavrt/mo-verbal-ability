@@ -3,23 +3,17 @@
 
 library(tidyverse)
 library(haven)
-#library(broom)
 
 source("auxiliary_functions.R")
 
 gss_full <- read_sav("data/GSS7218_R2.sav")
 gss_items <- read_csv("data/gss-items-98v.csv")
 
-# otherish_items <- c("peoptrbl", "selffrst", "selfless", "givblood", "givhmlss",
-#                     "retchnge", "cutahead", "volchrty", "givchrty", "givseat",
-#                     "helpaway", "carried",  "directns", "loanitem", "helphwrk",
-#                     "lentto",   "talkedto", "helpjob")
 
 gss <- gss_full %>%
   rename_all(tolower) %>% 
   select(id, year, wtssall, oversamp, sample, polviews, partyid, wordsum, degree, educ, 
-         sex, age, race, class, region, finrela, relig, attend, god, reliten,
-         #one_of(otherish_items),
+         sex, age, race, class, region, finrela, relig, attend, god, reliten, news, 
          one_of(gss_items$issue))
 
 gss <- gss %>% 
