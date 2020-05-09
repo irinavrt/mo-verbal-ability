@@ -12,6 +12,9 @@ gss_items <- read_csv("data/gss-items-98v.csv")
 
 gss <- gss_full %>%
   rename_all(tolower) %>% 
+  # combine two different wordings of the same issues
+  mutate(hubbywk1 = coalesce(hubbywk1, hubbywrk),
+         twoincs1 = coalesce(twoincs1, twoincs)) %>% 
   select(id, year, wtssall, oversamp, sample, polviews, partyid, wordsum, degree, educ, 
          sex, age, race, class, region, finrela, relig, attend, god, reliten, news, 
          one_of(gss_items$issue))
